@@ -1,8 +1,8 @@
 # CAWA_wintering
 Final project for BZ525, potentially moving into a small paper
 
-<pre>
 File Structure:
+<pre>
 analysis/
   |-01.fastq_to_vcf/ 
     |-01.1.fastq_to_vcf #notes on the fastq processing that was done before we got the data and how Holden fiddled with the vcf to make it work for our stuff
