@@ -1,6 +1,7 @@
 # CAWA_wintering
 Final project for BZ525, potentially moving into a small paper
 
+<pre>
 File Structure:
 analysis/
   |-01.fastq_to_vcf/ 
@@ -14,3 +15,4 @@ analysis/
     
 data/
   |-metadata
+</pre>
