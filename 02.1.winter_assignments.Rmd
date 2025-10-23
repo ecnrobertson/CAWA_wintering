@@ -1,0 +1,312 @@
+---
+title: "02.1.winter_assignments"
+author: "Erica Robertson"
+date: "2025-10-23"
+output: html_document
+---
+
+BASIC CODE FROM CH'S TUTORIAL, WE CAN ADAPT FOR OUR DATA...
+
+# INTRODUCTION
+So, two options for back assigning wintering birds. We can run rubias, which will assign the individuals to a distinct genetic cluster, or we can run Origen, which assigns individuals to a lat/long region. We're going to be running Origen here.
+
+# Libraries
+
+```{r}
+library(raster)
+library(tidyverse)
+library(sf)
+library(ggspatial)
+library(rubias)
+#install.packages("~/tar_files/OriGen_1.64.tar.gz", type="source")
+library(OriGen) #version 1.64
+library(RColorBrewer)
+library(ggplot2)
+library(ggpubr)
+#This is the function that calculates the distance between predicted lat/long and the lat/long in the meta data file
+library(geosphere)
+library(rworldmap)
+library(spatialEco)
+library(dplyr)
+library(reshape2)
+library(plotly)
+library(ggiraph)
+library(rnaturalearth)
+library(openxlsx)
+```
+
+# INPUT FILES
+Here you have to input 5 data files. The ped and map file for breeders, with an associated location file (Sample, lat and long), and the ped and map file for the unknown migrating birds.
+
+```{r}
+hethOri<-ConvertUnknownPEDData("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.breeding_inclNew.rmdup.incl_hyb.order.4OriGen.91snp","analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.breeding_inclNew.rmdup.incl_hyb.fix.loc2","analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.migrating.order.4OriGen.91snp")
+
+ind<-read_delim("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.migrating.order.4OriGen.91snp.ped",delim=" ",col_names = F) %>% dplyr::select(X2) %>% rename(Sample=X2)
+
+#Read in migrating bird meta information
+migr_meta<-openxlsx::read.xlsx("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/Bandelier HETH:WIWA Feathers 2017-2020.xlsx",sheet=1) %>% rename(Sample="Field.#")
+
+met_allM<-ind %>% left_join(migr_meta) 
+
+#Read in breeding locations
+breed_loc<-read_delim("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.breeding_inclNew.rmdup.incl_hyb.fix.loc2",delim="\t")
+breed_meta<-read_csv("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.breeding.meta.final_fixed2.csv")
+breed_meta2<-breed_loc %>% left_join(breed_meta)
+breed_meta2
+```
+
+# RUN ORIGEN
+To run __OriGen__, we are going to use the _FitOriGenModelFindUnknowns_ model. You can play around with the _MaxGridLength_ to adjust the size of pixels/grids you can pinpoint the breeding origin location of the migrating birds.
+```{r}
+#MaxGridLength is the maximum number of boxes allowed to span the region in either direction
+#RhoParameter is a tuning constant
+
+OrigenP<-FitOriGenModelFindUnknowns(hethOri$DataArray,hethOri$SampleCoordinates,hethOri$UnknownData,MaxGridLength=70,RhoParameter=10)
+```
+
+Let's look at the results a bit.
+
+```{r}
+summary(OrigenP)
+OrigenP$SampleSites
+```
+
+So, this is the number of sites associated with the breeding birds.
+
+This code chunk let's us look at the allele frequency across several loci in space. HOWEVER, it takes __forever__ to run, so I've run it so you can have the data file. 
+
+```
+#Fitting the model
+trials2=FitMultinomialModel(hethOri$DataArray,hethOri$SampleCoordinates,MaxGridLength=70,RhoParameter=10)
+str(trials2)
+saveRDS(trials2,file="HETH.AlleleFreqSurf.RDS")
+```
+
+So, we'll instead, read in the data and investigate allele frequency in space for a handful of loci.
+
+```{r}
+trials3<-readRDS("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.AlleleFreqSurf.RDS")
+#Plotting the model
+PlotAlleleFrequencySurface(trials3,LocusNumber=11,AlleleNumber=1,MaskWater=TRUE,Scale=FALSE)
+
+```
+Now let's look at what the probability looks like for the migrating birds.
+
+```{r}
+north_america_land <- ne_countries(scale = "medium", continent = "North America", returnclass = "sf")
+
+#winter points
+#points <- read.csv("Niche.analysis/OriGen/YEWA_breed.winter_coords.csv")
+
+# Define the individual number to process
+unknown_number <- 20  # Change this value to select a different individual
+
+# Define the specific winter sample ID you want to plot
+#selected_sample <- "W.07N66005"  # Change this to any SampleID of interest
+
+# Filter the dataframe to get the selected sample's coordinates
+#selected_point <- points %>% filter(SampleID == selected_sample)
+
+# Extract the probability surface for that individual
+prob_surface <- OrigenP$UnknownGrids[,,unknown_number]
+
+# Get grid dimensions
+grid_x <- OrigenP$GridLength[1]
+grid_y <- OrigenP$GridLength[2]
+
+# Generate grid indices
+x_seq <- seq_len(grid_x)
+y_seq <- seq_len(grid_y)
+
+# Create a data frame with grid indices and probability values
+grid_indices <- expand.grid(X = x_seq, Y = y_seq)
+prob_values <- as.vector(prob_surface)
+plot_data <- cbind(grid_indices, Probability = prob_values)
+
+# Map grid indices to coordinates
+plot_data$Longitude <- OrigenP$GridCoordinates[1, plot_data$X]
+plot_data$Latitude <- OrigenP$GridCoordinates[2, plot_data$Y]
+
+# Convert to sf object
+plot_data_sf <- st_as_sf(plot_data, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Retain only grid cells that overlap with land
+filtered_plot_data_sf <- st_intersection(plot_data_sf, north_america_land)
+
+# Extract coordinates from geometry
+filtered_plot_data <- filtered_plot_data_sf %>%
+  mutate(
+    Longitude = st_coordinates(geometry)[, 1],
+    Latitude = st_coordinates(geometry)[, 2],
+    Rescaled_Probability = (Probability - min(Probability)) / (max(Probability) - min(Probability))
+  )
+
+# Plot and save the heatmap
+ggplot() +
+  geom_sf(data = north_america_land, fill = "grey92", color = "grey9", size = 0.2, alpha = 1) +
+  geom_tile(data = filtered_plot_data, aes(x = Longitude, y = Latitude, fill = Rescaled_Probability), alpha = 0.7) +
+  scale_fill_gradient(name = "Probability", low = "grey92", high = "red") +
+  coord_sf(xlim = c(-150, -50), ylim = c(5, 70), expand = FALSE) +
+  scale_x_continuous(breaks = seq(-150, -50, by = 25), labels = function(x) as.character(x)) +
+  scale_y_continuous(breaks = seq(20, 60, by = 20), labels = function(y) as.character(y)) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) 
+  # + geom_point(data = selected_point, aes(x = Longitude, y = Latitude),
+  #         color = "skyblue3", size = 3, shape = 21, fill = "skyblue", stroke = 1)
+```
+To save these plots use the following code
+```{r}
+ggsave("analysis/02.OriGen_winter_assignments/test_data/HETH.Unknown20.ProbSurf.pdf")
+```
+
+Next, we are just taking the HETH breeding shapefile, and we are only going to keep the lat/longs that have the highest probability if they fall within the breeding polygon. They should normally, you'll see them fall near where we have sampling localities, but this code makes sure this is the case.
+
+```{r}
+breeding <- st_read("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/herthr_range_2023/herthr_prediction-area_2023.gpkg") %>% filter(season=="breeding")
+#convert the geometry of the sf to spatial polygons
+breedE_spd1<-sf::as_Spatial(st_geometry(breeding),IDs=as.character(1:nrow(breeding)))
+
+#grab data from sf object
+df<-breeding
+df$geometry<-NULL
+df<-as.data.frame(df)
+
+#create teh spatialpolygon data fram
+breedE_spd<-sp::SpatialPolygonsDataFrame(breedE_spd1,data=df)
+
+
+#now try to subset grid
+grid <- expand.grid(OrigenP$GridCoordinates[1,],OrigenP$GridCoordinates[2,])
+grid <- grid[grid$Var2!=0,]
+names(grid) <- c("x","y")
+pts <- SpatialPointsDataFrame(grid[,c(1,2)],data=grid[,c(2,1)],proj4string=attributes(breedE_spd)$proj4string)
+overlap <- sp::over(pts,as(breedE_spd,"SpatialPolygons"))
+subgrid <- grid[!is.na(overlap),]
+subgrid$xind <- match(subgrid$x,OrigenP$GridCoordinates[1,])
+subgrid$yind <- match(subgrid$y,OrigenP$GridCoordinates[2,])
+
+for (i in 1:nrow(hethOri$UnknownData)) {
+  myGrid2 <- OrigenP$UnknownGrids[,,i]
+  for (j in 1:nrow(subgrid)) {
+    subgrid[j,i+4] <- myGrid2[subgrid$xind[j],subgrid$yind[j]]
+  }
+}
+```
+
+This aligns the the data with the uknonwn migrating bird names, and writes out the data so you don't have to run this analysis each time. If you ever need to come back to the data, just read in the RDS file.
+
+```{r}
+#POPID,  migrating birds
+pedM<-read_delim("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH.migrating.order.4OriGen.91snp.ped",delim=" ",col_names = F) %>% rename(Sample=X2) %>% dplyr::select(Sample)
+
+names(subgrid) <- c("x","y","xind","yind",as.character(pedM$Sample))
+saveRDS(subgrid,"HETH_OriGen_ProbSurface.Migr.POPID.rds")
+
+rds<-readRDS("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH_OriGen_ProbSurface.Migr.POPID.rds")
+rds
+```
+
+Each row is associated with a lat/long and each individual has a probability of being assigned to that lat/long. In this code chunk, we are choosing the lat/long with the highest probability.
+
+```{r}
+write.table(rds, "analysis/02.OriGen_winter_assignments/test_data/HETH_OriGen_ProbSurface.Migr.POPID.txt", quote = F, sep="\t", row.names = F)
+
+df_rds<-read_delim("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH_OriGen_ProbSurface.Migr.POPID.txt",delim="\t") 
+
+#column where individual starts
+for (j in 5:ncol(df_rds)){
+  i <- max(df_rds[,j],na.rm=T) 
+  k<-df_rds[which(df_rds[,j] == i), c(1,2,j)] 
+  write.table(k,file="HETH_OriGen_ProbSurface.Migr.POPID.highestprob_origen.final2.txt",row.names=F,quote=F,sep="\t",append=T,col.names=F)
+}
+
+##read in the file you just created. 
+pred<-read_delim("analysis/02.OriGen_winter_assignments/test_data/HETH_assays/HETH_OriGen_ProbSurface.Migr.POPID.highestprob_origen.final2.txt",delim="\t",col_names = F) %>% rename(predLong=X1,predLat=X2,highprob=X3)
+dim(pred)
+##There are no sample names attached to it, BUT it is in the order of the meta data for the migrating birds (aka the order of the ped file), so we are adding those sample names to the file and writing out the data.
+out<-cbind(met_allM,pred)
+saveRDS(out,"analysis/02.OriGen_winter_assignments/test_data/HETH_OriGen_ProbSurface.Migr.POPID.predlatlong_only.clipped.rds")
+
+```
+
+Now let's calculate the distance for each bird. From the place where it was captured, to the place it was predicted to come from.
+```{r}
+##Create matrix
+out<-readRDS("analysis/02.OriGen_winter_assignments/test_data/HETH_OriGen_ProbSurface.Migr.POPID.predlatlong_only.clipped.rds")
+mat <- distm(out[,c('predLong','predLat')], out[,c('Long','Lat')], fun=distHaversine)
+colnames(mat) <- out$Sample
+rownames(mat) <- out$Sample
+
+dist<-melt(mat) %>% filter(Var1==Var2) %>% rename(Sample=Var1) %>% left_join(out) %>% mutate(km=value/1000) %>% distinct()
+
+dist %>% dplyr::select(Sample,"Band.#",Lat,Long,Species.code:km) %>% write.table("analysis/02.OriGen_winter_assignments/test_data/HETH_OriGen.Predlatlong_only.clipped.txt",row.names=F,quote=F,sep="\t")
+dist %>% dplyr::select(Sample,"Band.#",Lat,Long,Species.code:km)
+```
+
+Let's plot the probabilities of each lat/long location. We can see which ones have extremely low probabilities and potentially filter out those.
+```{r}
+pdf("analysis/02.OriGen_winter_assignments/test_data/HETH.highprob_Origen.hist.pdf")
+g<-gghistogram(dist, x = "highprob",
+            add = "mean", rug = TRUE,
+            palette = "Dark2",bins=60)+theme(aspect.ratio = 1)
+dev.off()
+
+g
+
+
+dist %>% filter(highprob>0.1) %>% gghistogram(x = "highprob",
+            add = "mean", rug = TRUE,
+            palette = "Dark2",bins=60)+theme(aspect.ratio = 1)
+```
+
+```{r}
+dist %>% mutate(unknown_num=row_number()) %>% arrange(highprob) %>% dplyr::select(Sample,highprob,km,unknown_num)
+#18N02146, unknown numb 33
+
+```
+Now let's look at distance, by month.
+```{r}
+pdf("analysis/02.OriGen_winter_assignments/test_data/HETH.highprob_dist.hist.pdf")
+d<-gghistogram(dist, x = "km",
+            add = "mean", rug = TRUE,
+            color = "Month", fill = "Month",
+            palette = "Dark2",bins=10)+theme(aspect.ratio = 1)
+dev.off()
+d
+```
+Maybe a histogram isn't the best way to look at the data. Let's look at this with a boxplot. 
+
+```{r}
+dist %>% ggplot() + geom_boxplot(aes(x = Month,y= km, fill = Month))+
+  theme(aspect.ratio = 1) +theme_classic()
+
+```
+# PLOT RESULTS
+
+```{r}
+world <- ne_countries(scale='medium',returnclass = 'sf')
+class(world)
+NorthAmerica<-world %>% filter(region_wb=="North America")
+
+
+gworld <- ggplot(data = NorthAmerica) +
+  geom_sf(aes(fill = NULL)) +
+  geom_spatial_point(data=breed_meta2,aes(x=Long,y=Lat,shape=GeneticCluster_Fluidigm,color=GeneticCluster_Fluidigm))+
+  scale_fill_viridis_d(option = "plasma") +
+  theme(panel.background = element_rect(fill = NA),
+     panel.border = element_rect(fill = NA))+
+  coord_sf(datum=st_crs(4326),xlim=c(-175, -50),ylim=c(25,75),expand = FALSE)+
+  scale_shape_manual(values=c(19, 17, 15, 23, 18)) +xlab("Longitude")+ylab("Latitude")
+gworld
+
+```

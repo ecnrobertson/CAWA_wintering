@@ -1,0 +1,12 @@
+---
+title: "01.fastq_processing"
+author: "Erica Robertson"
+date: "2025-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Notes on how the fastq was processing, and the things that were done to the vcf files to make them work
